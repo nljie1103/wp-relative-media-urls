@@ -173,7 +173,56 @@ class JRMU_Admin {
 							</tr>
 						</table>
 
-						<h2>三、转换范围</h2>
+						<h2>三、多域名访问适配</h2>
+						<p class="description">这里解决首页是香港反代域名，但点击文章、页面、菜单后又跳回源站固定域名的问题。默认关闭，开启后推荐使用白名单模式。</p>
+						<table class="form-table" role="presentation">
+							<tr>
+								<th scope="row">总开关</th>
+								<td>
+									<label>
+										<input type="checkbox" name="<?php echo esc_attr( JRMU_OPTION_KEY ); ?>[domain_adaptation_enabled]" value="1" <?php checked( $options['domain_adaptation_enabled'], 1 ); ?>>
+										启用站内链接跟随当前访问域名
+									</label>
+									<p class="description">开启后，WordPress 生成文章、页面、分类、菜单等站内链接时，会优先使用当前访问域名。不会修改数据库里的 <code>home</code> / <code>siteurl</code>。</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row">允许域名</th>
+								<td>
+									<textarea name="<?php echo esc_attr( JRMU_OPTION_KEY ); ?>[domain_allowed_hosts]" rows="5" class="large-text code" placeholder="blog.jiuliu.org&#10;hk-blog.jiuliu.org&#10;origin-blog.jiuliu.org"><?php echo esc_textarea( $options['domain_allowed_hosts'] ); ?></textarea>
+									<p class="description">每行一个允许访问入口域名。白名单模式下，只有这里列出的域名才会触发动态站点地址，避免任意 Host 被用来生成站内链接。</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row">适配模式</th>
+								<td>
+									<label><input type="radio" name="<?php echo esc_attr( JRMU_OPTION_KEY ); ?>[domain_mode]" value="whitelist" <?php checked( $options['domain_mode'], 'whitelist' ); ?>> 仅允许白名单域名，推荐</label><br>
+									<label><input type="radio" name="<?php echo esc_attr( JRMU_OPTION_KEY ); ?>[domain_mode]" value="any" <?php checked( $options['domain_mode'], 'any' ); ?>> 允许任意 Host，高级模式</label>
+									<p class="description">高级模式适合你明确知道所有绑定域名都可信的场景。公开站点一般建议使用白名单。</p>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row">协议</th>
+								<td>
+									<label><input type="radio" name="<?php echo esc_attr( JRMU_OPTION_KEY ); ?>[domain_scheme]" value="https" <?php checked( $options['domain_scheme'], 'https' ); ?>> 强制 HTTPS，推荐</label><br>
+									<label><input type="radio" name="<?php echo esc_attr( JRMU_OPTION_KEY ); ?>[domain_scheme]" value="auto" <?php checked( $options['domain_scheme'], 'auto' ); ?>> 自动识别 HTTPS / X-Forwarded-Proto</label><br>
+									<label><input type="radio" name="<?php echo esc_attr( JRMU_OPTION_KEY ); ?>[domain_scheme]" value="http" <?php checked( $options['domain_scheme'], 'http' ); ?>> 强制 HTTP</label>
+								</td>
+							</tr>
+							<tr>
+								<th scope="row">高级选项</th>
+								<td>
+									<label><input type="checkbox" name="<?php echo esc_attr( JRMU_OPTION_KEY ); ?>[domain_dynamic_siteurl]" value="1" <?php checked( $options['domain_dynamic_siteurl'], 1 ); ?>> 同时动态适配 siteurl，影响主题/插件资源生成</label><br>
+									<label><input type="checkbox" name="<?php echo esc_attr( JRMU_OPTION_KEY ); ?>[domain_rewrite_frontend_links]" value="1" <?php checked( $options['domain_rewrite_frontend_links'], 1 ); ?>> 前台 HTML 兜底替换站内绝对链接为当前域名</label><br>
+									<label><input type="checkbox" name="<?php echo esc_attr( JRMU_OPTION_KEY ); ?>[domain_exclude_admin]" value="1" <?php checked( $options['domain_exclude_admin'], 1 ); ?>> 后台 wp-admin 保持原始站点地址</label><br>
+									<label><input type="checkbox" name="<?php echo esc_attr( JRMU_OPTION_KEY ); ?>[domain_exclude_login]" value="1" <?php checked( $options['domain_exclude_login'], 1 ); ?>> 登录页 wp-login.php 保持原始站点地址</label><br>
+									<label><input type="checkbox" name="<?php echo esc_attr( JRMU_OPTION_KEY ); ?>[domain_skip_system_endpoints]" value="1" <?php checked( $options['domain_skip_system_endpoints'], 1 ); ?>> REST API、Feed、Sitemap、XML 等系统端点保持原始站点地址</label>
+									<p class="description">建议先只开启总开关和白名单，确认文章点击不再跳回源站后，再按需开启“前台 HTML 兜底替换”。</p>
+								</td>
+							</tr>
+						</table>
+
+						<h2>四、转换范围</h2>
 						<table class="form-table" role="presentation">
 							<tr>
 								<th scope="row">路径范围</th>
@@ -225,6 +274,9 @@ class JRMU_Admin {
 						<?php endforeach; ?>
 					</ul>
 					<hr>
+					<h2>多域名状态</h2>
+					<?php $this->render_domain_status(); ?>
+					<hr>
 					<h2>转换示例</h2>
 					<pre>https://example.com/wp-content/uploads/a.jpg
 ↓
@@ -270,6 +322,7 @@ class JRMU_Admin {
 			'未来上传媒体相对输出' => ! empty( $options['convert_future_media_output'] ),
 			'保存文章时转换'     => ! empty( $options['convert_post_on_save'] ),
 			'前台文章临时转换'   => ! empty( $options['convert_post_on_frontend'] ),
+				'多域名访问适配'     => ! empty( $options['domain_adaptation_enabled'] ),
 		);
 		?>
 		<ul class="jrmu-status-list">
@@ -284,6 +337,38 @@ class JRMU_Admin {
 	}
 
 	/**
+	 * 渲染多域名状态。
+	 */
+	private function render_domain_status() {
+		$adapter = JRMU_Domain_Adapter::instance();
+		$info    = $adapter->get_debug_info();
+		?>
+		<ul class="jrmu-list">
+			<li>当前 Host：<code><?php echo esc_html( $info['current_host'] ? $info['current_host'] : '未识别' ); ?></code></li>
+			<li>当前协议：<code><?php echo esc_html( $info['current_scheme'] ); ?></code></li>
+			<li>是否允许：<span class="jrmu-badge <?php echo $info['is_allowed'] ? 'is-on' : 'is-off'; ?>"><?php echo $info['is_allowed'] ? '允许' : '不允许'; ?></span></li>
+			<li>动态基础 URL：<code><?php echo esc_html( $info['dynamic_base_url'] ? $info['dynamic_base_url'] : '未启用/不适用' ); ?></code></li>
+		</ul>
+		<p><strong>多域名白名单：</strong></p>
+		<ul class="jrmu-list">
+			<?php if ( empty( $info['allowed_hosts'] ) ) : ?>
+				<li><em>未设置</em></li>
+			<?php else : ?>
+				<?php foreach ( $info['allowed_hosts'] as $host ) : ?>
+					<li><code><?php echo esc_html( $host ); ?></code></li>
+				<?php endforeach; ?>
+			<?php endif; ?>
+		</ul>
+		<p><strong>可改写来源域名：</strong></p>
+		<ul class="jrmu-list">
+			<?php foreach ( $info['source_hosts'] as $host ) : ?>
+				<li><code><?php echo esc_html( $host ); ?></code></li>
+			<?php endforeach; ?>
+		</ul>
+		<?php
+	}
+
+	/**
 	 * 渲染历史文章工具。
 	 *
 	 * @param array $results 扫描结果。
@@ -293,7 +378,7 @@ class JRMU_Admin {
 		$scan_status    = isset( $_GET['jrmu_post_status'] ) ? sanitize_key( wp_unslash( $_GET['jrmu_post_status'] ) ) : 'publish';
 		$keyword        = isset( $_GET['jrmu_keyword'] ) ? sanitize_text_field( wp_unslash( $_GET['jrmu_keyword'] ) ) : '';
 		?>
-		<h2>四、历史文章处理</h2>
+		<h2>五、历史文章处理</h2>
 		<p class="description">这里处理已经发布/已经保存到数据库里的文章内容。它和媒体库输出转换是两个独立功能。先扫描预览，再勾选文章执行转换。</p>
 
 		<form method="get" action="<?php echo esc_url( admin_url( 'admin.php' ) ); ?>" class="jrmu-scan-form">

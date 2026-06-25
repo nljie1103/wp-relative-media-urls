@@ -32,6 +32,17 @@ class JRMU_Settings {
 			'convert_post_on_save'          => 0,
 			'convert_post_on_frontend'      => 0,
 
+			// 多域名访问适配模块。
+			'domain_adaptation_enabled'    => 0,
+			'domain_dynamic_siteurl'        => 1,
+			'domain_rewrite_frontend_links' => 0,
+			'domain_exclude_admin'         => 1,
+			'domain_exclude_login'         => 1,
+			'domain_skip_system_endpoints' => 1,
+			'domain_mode'                  => 'whitelist',
+			'domain_scheme'                => 'https',
+			'domain_allowed_hosts'         => '',
+
 			// 转换范围。
 			'target_uploads'                => 1,
 			'target_themes'                 => 0,
@@ -54,6 +65,12 @@ class JRMU_Settings {
 			'convert_future_media_output',
 			'convert_post_on_save',
 			'convert_post_on_frontend',
+			'domain_adaptation_enabled',
+			'domain_dynamic_siteurl',
+			'domain_rewrite_frontend_links',
+			'domain_exclude_admin',
+			'domain_exclude_login',
+			'domain_skip_system_endpoints',
 			'target_uploads',
 			'target_themes',
 			'target_plugins',
@@ -103,8 +120,15 @@ class JRMU_Settings {
 			$output['future_media_enabled_at'] = 0;
 		}
 
-		$output['extra_hosts'] = isset( $input['extra_hosts'] ) ? self::sanitize_extra_hosts( wp_unslash( $input['extra_hosts'] ) ) : '';
-		$output['scan_limit']  = isset( $input['scan_limit'] ) ? max( 10, min( 500, absint( $input['scan_limit'] ) ) ) : $defaults['scan_limit'];
+		$domain_mode = isset( $input['domain_mode'] ) ? sanitize_key( wp_unslash( $input['domain_mode'] ) ) : $defaults['domain_mode'];
+		$output['domain_mode'] = in_array( $domain_mode, array( 'whitelist', 'any' ), true ) ? $domain_mode : $defaults['domain_mode'];
+
+		$domain_scheme = isset( $input['domain_scheme'] ) ? sanitize_key( wp_unslash( $input['domain_scheme'] ) ) : $defaults['domain_scheme'];
+		$output['domain_scheme'] = in_array( $domain_scheme, array( 'https', 'http', 'auto' ), true ) ? $domain_scheme : $defaults['domain_scheme'];
+
+		$output['domain_allowed_hosts'] = isset( $input['domain_allowed_hosts'] ) ? self::sanitize_extra_hosts( wp_unslash( $input['domain_allowed_hosts'] ) ) : '';
+		$output['extra_hosts']           = isset( $input['extra_hosts'] ) ? self::sanitize_extra_hosts( wp_unslash( $input['extra_hosts'] ) ) : '';
+		$output['scan_limit']            = isset( $input['scan_limit'] ) ? max( 10, min( 500, absint( $input['scan_limit'] ) ) ) : $defaults['scan_limit'];
 
 		return $output;
 	}

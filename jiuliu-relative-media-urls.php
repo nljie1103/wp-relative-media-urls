@@ -2,8 +2,8 @@
 /**
  * Plugin Name: 九流媒体相对地址
  * Plugin URI: https://www.jiuliu.org
- * Description: 将 WordPress 媒体库输出与文章内容中的同站点媒体绝对地址转换为根相对地址，适合反向代理、缓存节点、源站隐藏和多入口域名场景。默认不启用任何转换，所有动作均需手动授权。
- * Version: 2.0.0
+ * Description: 将 WordPress 媒体库输出与文章内容中的同站点媒体绝对地址转换为根相对地址，适合反向代理、缓存节点、源站隐藏和多入口域名场景，并支持站内链接跟随当前访问域名。默认不启用任何转换，所有动作均需手动授权。
+ * Version: 3.0.0
  * Author: 九流
  * Author URI: https://www.jiuliu.org
  * License: GPLv2 or later
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'JRMU_VERSION', '2.0.0' );
+define( 'JRMU_VERSION', '3.0.0' );
 define( 'JRMU_PLUGIN_FILE', __FILE__ );
 define( 'JRMU_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'JRMU_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -67,6 +67,7 @@ final class Jiuliu_Relative_Media_Urls {
 	private function load_dependencies() {
 		require_once JRMU_PLUGIN_DIR . 'includes/class-jrmu-settings.php';
 		require_once JRMU_PLUGIN_DIR . 'includes/class-jrmu-converter.php';
+		require_once JRMU_PLUGIN_DIR . 'includes/class-jrmu-domain-adapter.php';
 		require_once JRMU_PLUGIN_DIR . 'includes/class-jrmu-admin.php';
 	}
 
@@ -128,6 +129,7 @@ final class Jiuliu_Relative_Media_Urls {
 	 * 初始化模块。
 	 */
 	public function init_modules() {
+		JRMU_Domain_Adapter::instance();
 		JRMU_Converter::instance();
 
 		if ( is_admin() ) {
