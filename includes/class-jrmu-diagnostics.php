@@ -30,11 +30,12 @@ class JRMU_Diagnostics {
 		foreach ( $server_keys as $key ) {
 			$server[ $key ] = isset( $_SERVER[ $key ] ) ? sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) ) : '';
 		}
+		$uploads = wp_get_upload_dir();
 		return array(
 			'home_url'          => home_url(),
 			'site_url'          => site_url(),
 			'content_url'       => content_url(),
-			'upload_baseurl'    => wp_get_upload_dir()['baseurl'],
+			'upload_baseurl'    => isset( $uploads['baseurl'] ) ? $uploads['baseurl'] : '',
 			'is_ssl'            => is_ssl() ? 'yes' : 'no',
 			'php_version'       => PHP_VERSION,
 			'wp_version'        => get_bloginfo( 'version' ),
@@ -51,12 +52,15 @@ class JRMU_Diagnostics {
 		if ( ! $url || ! preg_match( '#^https?://#i', $url ) ) {
 			return new WP_Error( 'invalid_url', '请输入有效的 http/https URL。' );
 		}
+		if ( ! self::is_url_host_allowed_for_check( $url ) ) {
+			return new WP_Error( 'host_not_allowed', '为安全起见，只允许检测当前站点、额外源站域名或多域名白名单中的 URL。' );
+		}
 		$response = wp_remote_get(
 			$url,
 			array(
 				'timeout'     => 10,
 				'redirection' => 3,
-				'sslverify'   => false,
+				'sslverify'   => apply_filters( 'jrmu_diagnostics_sslverify', true ),
 				'headers'     => array( 'Cache-Control' => 'no-cache' ),
 			)
 		);
@@ -73,6 +77,26 @@ class JRMU_Diagnostics {
 			'message' => wp_remote_retrieve_response_message( $response ),
 			'headers' => $out,
 		);
+	}
+
+	/** URL 检测白名单。 */
+	private static function is_url_host_allowed_for_check( $url ) {
+		$host = wp_parse_url( $url, PHP_URL_HOST );
+		if ( ! $host ) {
+			return false;
+		}
+		$host = strtolower( preg_replace( '/:\d+$/', '', $host ) );
+		$allowed = array_merge(
+			JRMU_Converter::instance()->get_allowed_hosts(),
+			JRMU_Domain_Adapter::instance()->get_allowed_domain_hosts(),
+			JRMU_Domain_Adapter::instance()->get_rewrite_source_hosts()
+		);
+		$current = isset( $_SERVER['HTTP_HOST'] ) ? strtolower( preg_replace( '/:\d+$/', '', sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) ) ) : '';
+		if ( $current ) {
+			$allowed[] = $current;
+		}
+		$allowed = array_unique( array_filter( $allowed ) );
+		return in_array( $host, $allowed, true );
 	}
 
 	/** 生成 Nginx 反代缓存配置建议。 */

@@ -141,11 +141,14 @@ class JRMU_Admin {
 		if ( 'done' === $notice ) {
 			$requested = isset( $_GET['requested'] ) ? absint( $_GET['requested'] ) : 0;
 			$updated   = isset( $_GET['updated'] ) ? absint( $_GET['updated'] ) : 0;
-			echo '<div class="notice notice-success is-dismissible"><p>操作完成：选择 ' . esc_html( $requested ) . ' 篇，实际更新 ' . esc_html( $updated ) . ' 篇。</p></div>';
+			$skipped   = isset( $_GET['skipped'] ) ? absint( $_GET['skipped'] ) : max( 0, $requested - $updated );
+			echo '<div class="notice notice-success is-dismissible"><p>操作完成：选择 ' . esc_html( $requested ) . ' 篇，实际更新 ' . esc_html( $updated ) . ' 篇，跳过 ' . esc_html( $skipped ) . ' 篇。已在日志中记录，支持修订版本的文章会在更新前创建修订。</p></div>';
 		} elseif ( 'security_failed' === $notice ) {
 			echo '<div class="notice notice-error is-dismissible"><p>安全验证失败，请刷新页面后重试。</p></div>';
 		} elseif ( 'no_posts' === $notice ) {
 			echo '<div class="notice notice-info is-dismissible"><p>没有选择任何文章，没有执行修改。</p></div>';
+		} elseif ( 'invalid_action' === $notice ) {
+			echo '<div class="notice notice-error is-dismissible"><p>无效操作，没有执行修改。</p></div>';
 		} elseif ( 'logs_cleared' === $notice ) {
 			echo '<div class="notice notice-success is-dismissible"><p>日志已清空。</p></div>';
 		}
@@ -244,33 +247,40 @@ class JRMU_Admin {
 	/** 扫描页。 */
 	private function render_scanner_tab() {
 		$options      = JRMU_Settings::get_options();
+		$should_scan  = ! empty( $_GET['jrmu_scan'] );
 		$post_type    = isset( $_GET['jrmu_post_type'] ) ? sanitize_key( wp_unslash( $_GET['jrmu_post_type'] ) ) : 'any';
 		$post_status  = isset( $_GET['jrmu_post_status'] ) ? sanitize_key( wp_unslash( $_GET['jrmu_post_status'] ) ) : 'publish';
 		$keyword      = isset( $_GET['jrmu_keyword'] ) ? sanitize_text_field( wp_unslash( $_GET['jrmu_keyword'] ) ) : '';
 		$target_base  = isset( $_GET['jrmu_target_base'] ) ? esc_url_raw( wp_unslash( $_GET['jrmu_target_base'] ) ) : home_url();
-		$should_scan  = ! empty( $_GET['jrmu_scan'] );
-		$results      = $should_scan ? JRMU_Scanner::instance()->scan_posts( array( 'post_type' => $post_type, 'post_status' => $post_status, 'keyword' => $keyword, 'target_base' => $target_base ) ) : array();
+		$preview_action = isset( $_GET['jrmu_preview_action'] ) ? sanitize_key( wp_unslash( $_GET['jrmu_preview_action'] ) ) : JRMU_Scanner::ACTION_CONVERT_MEDIA_RELATIVE;
+		if ( ! JRMU_Scanner::is_valid_action( $preview_action ) ) {
+			$preview_action = JRMU_Scanner::ACTION_CONVERT_MEDIA_RELATIVE;
+		}
+		$results = $should_scan ? JRMU_Scanner::instance()->scan_posts( array( 'post_type' => $post_type, 'post_status' => $post_status, 'keyword' => $keyword, 'target_base' => $target_base ) ) : array();
+		$actions = JRMU_Scanner::get_actions();
 		?>
-		<h2>扫描 / Dry Run / 修复</h2>
-		<p>这里不会自动修改任何东西。先扫描预览，再勾选文章执行操作。执行前仍建议备份数据库。</p>
-		<form method="get" action="<?php echo esc_url( admin_url( 'admin.php' ) ); ?>" class="jrmu-scan-form">
+		<h2>扫描 / 预览 / 修复</h2>
+		<div class="notice notice-warning inline"><p><strong>重要：</strong>扫描和预览不改数据库；“执行勾选文章”会永久修改勾选文章的正文/摘要。执行前请备份数据库。支持修订版本的文章会在更新前创建修订。</p></div>
+		<form method="get" class="jrmu-scanner">
 			<input type="hidden" name="page" value="jiuliu-relative-media-urls"><input type="hidden" name="tab" value="scanner"><input type="hidden" name="jrmu_scan" value="1">
-			<p><label>类型 <select name="jrmu_post_type"><option value="any" <?php selected( $post_type, 'any' ); ?>>文章 + 页面</option><option value="post" <?php selected( $post_type, 'post' ); ?>>文章</option><option value="page" <?php selected( $post_type, 'page' ); ?>>页面</option></select></label>
+			<p><label>类型 <select name="jrmu_post_type"><option value="any" <?php selected( $post_type, 'any' ); ?>>公开文章类型</option><option value="post" <?php selected( $post_type, 'post' ); ?>>文章</option><option value="page" <?php selected( $post_type, 'page' ); ?>>页面</option></select></label>
 			<label>状态 <select name="jrmu_post_status"><option value="publish" <?php selected( $post_status, 'publish' ); ?>>已发布</option><option value="draft" <?php selected( $post_status, 'draft' ); ?>>草稿</option><option value="private" <?php selected( $post_status, 'private' ); ?>>私密</option><option value="any" <?php selected( $post_status, 'any' ); ?>>全部</option></select></label>
 			<label>关键词 <input type="search" name="jrmu_keyword" value="<?php echo esc_attr( $keyword ); ?>"></label></p>
+			<p><label>预览动作 <select name="jrmu_preview_action"><?php foreach ( $actions as $key => $label ) : ?><option value="<?php echo esc_attr( $key ); ?>" <?php selected( $preview_action, $key ); ?>><?php echo esc_html( $label ); ?></option><?php endforeach; ?></select></label></p>
 			<p><label>恢复/改写目标域名 <input type="url" class="regular-text" name="jrmu_target_base" value="<?php echo esc_attr( $target_base ); ?>" placeholder="https://blog.jiuliu.org"></label> <?php submit_button( '扫描链接', 'secondary', 'submit', false ); ?></p>
 		</form>
 		<?php if ( $should_scan ) : ?>
 			<?php if ( empty( $results ) ) : ?>
 				<div class="notice notice-info inline"><p>没有发现匹配内容。</p></div>
 			<?php else : ?>
-				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" onsubmit="return confirm('建议先备份数据库。本操作只会修改勾选文章的正文/摘要，确认继续吗？');">
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" onsubmit="return confirm('建议先备份数据库。本操作只会修改勾选文章的正文/摘要，并会尽量创建文章修订。确认继续吗？');">
 					<input type="hidden" name="action" value="jrmu_apply_post_action"><?php wp_nonce_field( 'jrmu_apply_post_action' ); ?>
 					<input type="hidden" name="target_base" value="<?php echo esc_attr( $target_base ); ?>">
-					<div class="jrmu-bulkbar"><select name="bulk_action"><option value="convert_media_relative">媒体/静态资源绝对 URL → 根相对</option><option value="restore_media_full">根相对媒体 URL → 完整 URL</option><option value="internal_to_target">站内绝对链接 → 目标域名</option><option value="internal_to_relative">站内绝对链接 → 根相对</option><option value="fix_mixed_https">本站 HTTP → HTTPS</option></select> <?php submit_button( '执行勾选文章', 'primary', 'submit', false ); ?></div>
-					<table class="widefat striped jrmu-results-table"><thead><tr><td class="check-column"><input type="checkbox" class="jrmu-check-all"></td><th>标题</th><th>统计</th><th>Dry Run 预览</th></tr></thead><tbody>
+					<div class="jrmu-bulkbar"><select name="bulk_action"><?php foreach ( $actions as $key => $label ) : ?><option value="<?php echo esc_attr( $key ); ?>" <?php selected( $preview_action, $key ); ?>><?php echo esc_html( $label ); ?></option><?php endforeach; ?></select> <?php submit_button( '执行勾选文章', 'primary', 'submit', false ); ?></div>
+					<table class="widefat striped jrmu-results-table"><thead><tr><td class="check-column"><input type="checkbox" class="jrmu-check-all"></td><th>标题</th><th>统计</th><th>当前动作 Dry Run 预览</th></tr></thead><tbody>
 					<?php foreach ( $results as $row ) : ?>
-					<tr><th class="check-column"><input type="checkbox" class="jrmu-post-check" name="post_ids[]" value="<?php echo esc_attr( $row['id'] ); ?>"></th><td><strong><?php echo esc_html( $row['title'] ); ?></strong><br><code>ID: <?php echo esc_html( $row['id'] ); ?> / <?php echo esc_html( $row['type'] . ' / ' . $row['status'] ); ?></code><br><?php if ( $row['edit_link'] ) : ?><a target="_blank" href="<?php echo esc_url( $row['edit_link'] ); ?>">编辑</a><?php endif; ?></td><td>媒体：<?php echo esc_html( $row['media_count'] ); ?><br>可恢复：<?php echo esc_html( $row['restore_count'] ); ?><br>站内：<?php echo esc_html( $row['internal_count'] ); ?><br>HTTP：<?php echo esc_html( $row['mixed_count'] ); ?><br>源站暴露：<?php echo esc_html( $row['exposure_count'] ); ?></td><td><?php foreach ( $row['samples'] as $sample ) : ?><div class="jrmu-sample"><span class="jrmu-sample-type"><?php echo esc_html( $sample['type'] ); ?></span><br><code><?php echo esc_html( $this->shorten( $sample['from'] ) ); ?></code><br>↓<br><code><?php echo esc_html( $this->shorten( $sample['to'] ) ); ?></code></div><?php endforeach; ?></td></tr>
+					<?php $samples = isset( $row['sample_groups'][ $preview_action ] ) ? $row['sample_groups'][ $preview_action ] : array(); ?>
+					<tr><th class="check-column"><input type="checkbox" class="jrmu-post-check" name="post_ids[]" value="<?php echo esc_attr( $row['id'] ); ?>"></th><td><strong><?php echo esc_html( $row['title'] ); ?></strong><br><code>ID: <?php echo esc_html( $row['id'] ); ?> / <?php echo esc_html( $row['type'] . ' / ' . $row['status'] ); ?></code><br><?php if ( $row['edit_link'] ) : ?><a target="_blank" href="<?php echo esc_url( $row['edit_link'] ); ?>">编辑</a><?php endif; ?></td><td>媒体：<?php echo esc_html( $row['media_count'] ); ?><br>可恢复：<?php echo esc_html( $row['restore_count'] ); ?><br>站内：<?php echo esc_html( $row['internal_count'] ); ?><br>HTTP：<?php echo esc_html( $row['mixed_count'] ); ?><br>源站暴露：<?php echo esc_html( $row['exposure_count'] ); ?></td><td><?php if ( empty( $samples ) ) : ?><span class="description">当前动作没有可处理样本。</span><?php else : ?><?php foreach ( array_slice( $samples, 0, 8 ) as $sample ) : ?><div class="jrmu-sample"><span class="jrmu-sample-type"><?php echo esc_html( $sample['type'] ); ?></span><br><code><?php echo esc_html( $this->shorten( $sample['from'] ) ); ?></code><br>↓<br><code><?php echo esc_html( $this->shorten( $sample['to'] ) ); ?></code></div><?php endforeach; ?><?php endif; ?></td></tr>
 					<?php endforeach; ?>
 					</tbody></table>
 				</form>
@@ -301,7 +311,14 @@ class JRMU_Admin {
 	private function render_diagnostics_tab() {
 		$env = JRMU_Diagnostics::get_environment();
 		$url = isset( $_GET['jrmu_check_url'] ) ? esc_url_raw( wp_unslash( $_GET['jrmu_check_url'] ) ) : '';
-		$check = $url ? JRMU_Diagnostics::check_url_headers( $url ) : null;
+		$check = null;
+		if ( $url ) {
+			if ( isset( $_GET['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'jrmu_check_headers' ) ) {
+				$check = JRMU_Diagnostics::check_url_headers( $url );
+			} else {
+				$check = new WP_Error( 'bad_nonce', '安全验证失败，请重新提交检测表单。' );
+			}
+		}
 		?>
 		<h2>反代环境检测</h2>
 		<table class="widefat striped jrmu-env-table"><tbody>
@@ -313,7 +330,8 @@ class JRMU_Admin {
 		<?php endforeach; ?>
 		</tbody></table>
 		<h2>缓存响应头检测</h2>
-		<form method="get"><input type="hidden" name="page" value="jiuliu-relative-media-urls"><input type="hidden" name="tab" value="diagnostics"><input type="url" class="large-text" name="jrmu_check_url" placeholder="https://blog.jiuliu.org/wp-content/uploads/example.jpg" value="<?php echo esc_attr( $url ); ?>"><?php submit_button( '检测 URL 响应头', 'secondary', 'submit', false ); ?></form>
+		<p class="description">为了避免后台被滥用为任意请求工具，检测 URL 仅允许当前站点、额外源站域名或多域名白名单中的域名。</p>
+		<form method="get"><input type="hidden" name="page" value="jiuliu-relative-media-urls"><input type="hidden" name="tab" value="diagnostics"><?php wp_nonce_field( 'jrmu_check_headers' ); ?><input type="url" class="large-text" name="jrmu_check_url" placeholder="https://blog.jiuliu.org/wp-content/uploads/example.jpg" value="<?php echo esc_attr( $url ); ?>"><?php submit_button( '检测 URL 响应头', 'secondary', 'submit', false ); ?></form>
 		<?php if ( $check ) : ?>
 			<?php if ( is_wp_error( $check ) ) : ?><div class="notice notice-error inline"><p><?php echo esc_html( $check->get_error_message() ); ?></p></div><?php else : ?>
 				<p>状态：<strong><?php echo esc_html( $check['code'] . ' ' . $check['message'] ); ?></strong></p>
@@ -341,8 +359,8 @@ class JRMU_Admin {
 		?>
 		<h2>转换日志</h2>
 		<?php if ( empty( $logs ) ) : ?><p>暂无转换日志。</p><?php else : ?>
-		<table class="widefat striped"><thead><tr><th>时间</th><th>动作</th><th>选择</th><th>更新</th><th>目标域名</th></tr></thead><tbody>
-		<?php foreach ( $logs as $log ) : ?><tr><td><?php echo esc_html( wp_date( 'Y-m-d H:i:s', absint( $log['time'] ) ) ); ?></td><td><code><?php echo esc_html( $log['action'] ); ?></code></td><td><?php echo esc_html( $log['requested'] ); ?></td><td><?php echo esc_html( $log['updated'] ); ?></td><td><code><?php echo esc_html( $log['target_base'] ); ?></code></td></tr><?php endforeach; ?>
+		<table class="widefat striped"><thead><tr><th>时间</th><th>动作</th><th>选择</th><th>更新</th><th>跳过</th><th>目标域名</th><th>错误</th></tr></thead><tbody>
+		<?php foreach ( $logs as $log ) : ?><tr><td><?php echo esc_html( wp_date( 'Y-m-d H:i:s', absint( $log['time'] ) ) ); ?></td><td><code><?php echo esc_html( $log['action'] ); ?></code></td><td><?php echo esc_html( isset( $log['requested'] ) ? $log['requested'] : 0 ); ?></td><td><?php echo esc_html( isset( $log['updated'] ) ? $log['updated'] : 0 ); ?></td><td><?php echo esc_html( isset( $log['skipped'] ) ? $log['skipped'] : 0 ); ?></td><td><code><?php echo esc_html( isset( $log['target_base'] ) ? $log['target_base'] : '' ); ?></code></td><td><?php if ( ! empty( $log['errors'] ) ) : ?><code><?php echo esc_html( implode( '；', (array) $log['errors'] ) ); ?></code><?php else : ?>-<?php endif; ?></td></tr><?php endforeach; ?>
 		</tbody></table>
 		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" onsubmit="return confirm('确定清空日志吗？');"><input type="hidden" name="action" value="jrmu_clear_logs"><?php wp_nonce_field( 'jrmu_clear_logs' ); ?><?php submit_button( '清空日志', 'delete' ); ?></form>
 		<?php endif; ?>
@@ -370,9 +388,13 @@ class JRMU_Admin {
 			exit;
 		}
 		$action      = isset( $_POST['bulk_action'] ) ? sanitize_key( wp_unslash( $_POST['bulk_action'] ) ) : '';
+		if ( ! JRMU_Scanner::is_valid_action( $action ) ) {
+			wp_safe_redirect( admin_url( 'admin.php?page=jiuliu-relative-media-urls&tab=scanner&jrmu_notice=invalid_action' ) );
+			exit;
+		}
 		$target_base = isset( $_POST['target_base'] ) ? esc_url_raw( wp_unslash( $_POST['target_base'] ) ) : home_url();
 		$result      = JRMU_Scanner::instance()->apply_post_action( $post_ids, $action, $target_base );
-		$url         = add_query_arg( array( 'page' => 'jiuliu-relative-media-urls', 'tab' => 'scanner', 'jrmu_notice' => 'done', 'requested' => $result['requested'], 'updated' => $result['updated'] ), admin_url( 'admin.php' ) );
+		$url         = add_query_arg( array( 'page' => 'jiuliu-relative-media-urls', 'tab' => 'scanner', 'jrmu_notice' => 'done', 'requested' => $result['requested'], 'updated' => $result['updated'], 'skipped' => isset( $result['skipped'] ) ? $result['skipped'] : 0 ), admin_url( 'admin.php' ) );
 		wp_safe_redirect( $url );
 		exit;
 	}

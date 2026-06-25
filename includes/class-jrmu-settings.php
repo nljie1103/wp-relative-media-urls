@@ -20,6 +20,8 @@ class JRMU_Settings {
 	 */
 	public static function get_defaults() {
 		return array(
+			'settings_version'              => JRMU_VERSION,
+
 			// 媒体库模块。
 			'convert_existing_media_output' => 0,
 			'convert_future_media_output'   => 0,
@@ -140,6 +142,7 @@ class JRMU_Settings {
 		$output['extra_hosts']            = isset( $input['extra_hosts'] ) ? self::sanitize_host_lines( wp_unslash( $input['extra_hosts'] ) ) : '';
 		$output['canonical_primary_host'] = isset( $input['canonical_primary_host'] ) ? self::sanitize_single_host( wp_unslash( $input['canonical_primary_host'] ) ) : '';
 		$output['scan_limit']             = isset( $input['scan_limit'] ) ? max( 10, min( 1000, absint( $input['scan_limit'] ) ) ) : $defaults['scan_limit'];
+		$output['settings_version']       = JRMU_VERSION;
 
 		return $output;
 	}

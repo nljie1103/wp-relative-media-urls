@@ -3,7 +3,7 @@
  * Plugin Name: 九流媒体相对地址
  * Plugin URI: https://www.jiuliu.org
  * Description: WordPress 反向代理与多域名链接助手：媒体相对地址、历史链接扫描/预览/恢复、多域名访问适配、反代环境检测、缓存检测与 Nginx 配置建议。默认不启用任何转换，所有永久修改均需手动确认。
- * Version: 4.0.0
+ * Version: 4.1.0
  * Author: 九流
  * Author URI: https://www.jiuliu.org
  * License: GPLv2 or later
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'JRMU_VERSION', '4.0.0' );
+define( 'JRMU_VERSION', '4.1.0' );
 define( 'JRMU_PLUGIN_FILE', __FILE__ );
 define( 'JRMU_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'JRMU_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -95,12 +95,28 @@ final class Jiuliu_Relative_Media_Urls {
 		$defaults = JRMU_Settings::get_defaults();
 		$merged   = wp_parse_args( $current, $defaults );
 
-		// 从旧版本升级时，新布尔功能默认保持关闭，不继承早期版本的激进默认行为。
+		// 从旧版本升级时，保留域名/路径配置，但重置会改变前后台输出或永久写库的开关，避免旧版本激进默认值继续生效。
+		$old_version = ! empty( $current['settings_version'] ) ? (string) $current['settings_version'] : '';
+		if ( ! $old_version || version_compare( $old_version, '4.1.0', '<' ) ) {
+			foreach ( array(
+				'convert_existing_media_output',
+				'convert_future_media_output',
+				'convert_post_on_save',
+				'convert_post_on_frontend',
+				'domain_adaptation_enabled',
+				'domain_rewrite_frontend_links',
+				'canonical_enabled',
+			) as $dangerous_key ) {
+				$merged[ $dangerous_key ] = 0;
+			}
+		}
+
 		foreach ( JRMU_Settings::get_boolean_keys() as $key ) {
 			if ( ! array_key_exists( $key, $current ) ) {
 				$merged[ $key ] = $defaults[ $key ];
 			}
 		}
+		$merged['settings_version'] = JRMU_VERSION;
 
 		update_option( JRMU_OPTION_KEY, $merged );
 	}

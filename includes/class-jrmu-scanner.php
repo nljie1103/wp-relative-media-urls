@@ -16,12 +16,35 @@ class JRMU_Scanner {
 	/** @var JRMU_Scanner|null */
 	private static $instance = null;
 
+	/** 支持的批量动作。 */
+	const ACTION_CONVERT_MEDIA_RELATIVE = 'convert_media_relative';
+	const ACTION_RESTORE_MEDIA_FULL     = 'restore_media_full';
+	const ACTION_INTERNAL_TO_TARGET     = 'internal_to_target';
+	const ACTION_INTERNAL_TO_RELATIVE   = 'internal_to_relative';
+	const ACTION_FIX_MIXED_HTTPS        = 'fix_mixed_https';
+
 	/** 获取单例。 */
 	public static function instance() {
 		if ( null === self::$instance ) {
 			self::$instance = new self();
 		}
 		return self::$instance;
+	}
+
+	/** 获取动作标签。 */
+	public static function get_actions() {
+		return array(
+			self::ACTION_CONVERT_MEDIA_RELATIVE => '媒体/静态资源绝对 URL → 根相对',
+			self::ACTION_RESTORE_MEDIA_FULL     => '根相对媒体 URL → 完整 URL',
+			self::ACTION_INTERNAL_TO_TARGET     => '站内绝对链接 → 目标域名',
+			self::ACTION_INTERNAL_TO_RELATIVE   => '站内绝对链接 → 根相对',
+			self::ACTION_FIX_MIXED_HTTPS        => '本站 HTTP → HTTPS',
+		);
+	}
+
+	/** 判断动作是否有效。 */
+	public static function is_valid_action( $action ) {
+		return array_key_exists( sanitize_key( $action ), self::get_actions() );
 	}
 
 	/** 扫描文章。 */
@@ -38,7 +61,7 @@ class JRMU_Scanner {
 			)
 		);
 
-		$post_types = 'any' === $args['post_type'] ? array( 'post', 'page' ) : array( sanitize_key( $args['post_type'] ) );
+		$post_types = $this->resolve_post_types( $args['post_type'] );
 		$post_status = 'any' === $args['post_status'] ? array( 'publish', 'draft', 'private', 'pending', 'future' ) : sanitize_key( $args['post_status'] );
 
 		$query = new WP_Query(
@@ -67,6 +90,21 @@ class JRMU_Scanner {
 		return $rows;
 	}
 
+	/** 解析扫描文章类型。 */
+	private function resolve_post_types( $post_type ) {
+		$post_type = sanitize_key( $post_type );
+		if ( 'any' !== $post_type && post_type_exists( $post_type ) && 'attachment' !== $post_type ) {
+			return array( $post_type );
+		}
+
+		$types = get_post_types( array( 'public' => true ), 'names' );
+		unset( $types['attachment'] );
+		if ( empty( $types ) ) {
+			$types = array( 'post', 'page' );
+		}
+		return array_values( $types );
+	}
+
 	/** 扫描单篇。 */
 	public function scan_single_post( $post_id, $target_base = '' ) {
 		$post = get_post( $post_id );
@@ -77,14 +115,21 @@ class JRMU_Scanner {
 		$content = (string) $post->post_content . "\n" . (string) $post->post_excerpt;
 		$conv    = JRMU_Converter::instance();
 		$domain  = JRMU_Domain_Adapter::instance();
+		$target  = $target_base ? $target_base : home_url();
 
-		$media_samples    = $conv->get_convertible_url_samples( $content, 5 );
-		$restore_samples  = $conv->get_restorable_url_samples( $content, $target_base ? $target_base : home_url(), 5 );
-		$internal_samples = $domain->get_rewriteable_url_samples( $content, 5, $target_base ? $target_base : home_url() );
-		$mixed_samples    = $this->get_mixed_content_samples( $content, 5 );
-		$exposed_samples  = $this->get_source_exposure_samples( $content, 5 );
+		$groups = array(
+			self::ACTION_CONVERT_MEDIA_RELATIVE => $conv->get_convertible_url_samples( $content, 10 ),
+			self::ACTION_RESTORE_MEDIA_FULL     => $conv->get_restorable_url_samples( $content, $target, 10 ),
+			self::ACTION_INTERNAL_TO_TARGET     => $domain->get_rewriteable_url_samples( $content, 10, $target ),
+			self::ACTION_INTERNAL_TO_RELATIVE   => $domain->get_rewriteable_url_samples( $content, 10, '' ),
+			self::ACTION_FIX_MIXED_HTTPS        => $this->get_mixed_content_samples( $content, 10 ),
+			'exposure'                         => $this->get_source_exposure_samples( $content, 10 ),
+		);
 
-		$total = count( $media_samples ) + count( $restore_samples ) + count( $internal_samples ) + count( $mixed_samples ) + count( $exposed_samples );
+		$total = 0;
+		foreach ( $groups as $items ) {
+			$total += count( $items );
+		}
 
 		return array(
 			'id'               => absint( $post_id ),
@@ -92,13 +137,14 @@ class JRMU_Scanner {
 			'type'             => $post->post_type,
 			'status'           => $post->post_status,
 			'edit_link'        => get_edit_post_link( $post_id, 'raw' ),
-			'media_count'      => count( $media_samples ),
-			'restore_count'    => count( $restore_samples ),
-			'internal_count'   => count( $internal_samples ),
-			'mixed_count'      => count( $mixed_samples ),
-			'exposure_count'   => count( $exposed_samples ),
+			'media_count'      => count( $groups[ self::ACTION_CONVERT_MEDIA_RELATIVE ] ),
+			'restore_count'    => count( $groups[ self::ACTION_RESTORE_MEDIA_FULL ] ),
+			'internal_count'   => max( count( $groups[ self::ACTION_INTERNAL_TO_TARGET ] ), count( $groups[ self::ACTION_INTERNAL_TO_RELATIVE ] ) ),
+			'mixed_count'      => count( $groups[ self::ACTION_FIX_MIXED_HTTPS ] ),
+			'exposure_count'   => count( $groups['exposure'] ),
 			'total'            => $total,
-			'samples'          => array_slice( array_merge( $media_samples, $restore_samples, $internal_samples, $mixed_samples, $exposed_samples ), 0, 8 ),
+			'sample_groups'    => $groups,
+			'samples'          => array_slice( array_merge( $groups[ self::ACTION_CONVERT_MEDIA_RELATIVE ], $groups[ self::ACTION_RESTORE_MEDIA_FULL ], $groups[ self::ACTION_INTERNAL_TO_TARGET ], $groups[ self::ACTION_FIX_MIXED_HTTPS ], $groups['exposure'] ), 0, 8 ),
 		);
 	}
 
@@ -134,11 +180,34 @@ class JRMU_Scanner {
 		$post_ids    = array_filter( array_unique( $post_ids ) );
 		$action      = sanitize_key( $action );
 		$target_base = $target_base ? untrailingslashit( esc_url_raw( $target_base ) ) : home_url();
-		$updated     = 0;
+
+		if ( ! self::is_valid_action( $action ) ) {
+			return array( 'requested' => count( $post_ids ), 'updated' => 0, 'skipped' => count( $post_ids ), 'errors' => array( '无效操作。' ) );
+		}
+		if ( in_array( $action, array( self::ACTION_RESTORE_MEDIA_FULL, self::ACTION_INTERNAL_TO_TARGET ), true ) && ! preg_match( '#^https?://#i', $target_base ) ) {
+			return array( 'requested' => count( $post_ids ), 'updated' => 0, 'skipped' => count( $post_ids ), 'errors' => array( '目标域名无效。' ) );
+		}
+
+		$lock_key = 'jrmu_apply_lock_' . get_current_user_id();
+		if ( get_transient( $lock_key ) ) {
+			return array( 'requested' => count( $post_ids ), 'updated' => 0, 'skipped' => count( $post_ids ), 'errors' => array( '已有处理任务正在进行，请稍后再试。' ) );
+		}
+		set_transient( $lock_key, 1, 5 * MINUTE_IN_SECONDS );
+
+		$updated = 0;
+		$skipped = 0;
+		$errors  = array();
 
 		foreach ( $post_ids as $post_id ) {
+			if ( ! current_user_can( 'edit_post', $post_id ) ) {
+				++$skipped;
+				$errors[] = '无权限编辑文章 ID ' . $post_id;
+				continue;
+			}
+
 			$post = get_post( $post_id );
 			if ( ! $post ) {
+				++$skipped;
 				continue;
 			}
 
@@ -148,42 +217,56 @@ class JRMU_Scanner {
 			$new_excerpt = $old_excerpt;
 
 			switch ( $action ) {
-				case 'convert_media_relative':
+				case self::ACTION_CONVERT_MEDIA_RELATIVE:
 					$new_content = JRMU_Converter::instance()->convert_content( $old_content );
 					$new_excerpt = JRMU_Converter::instance()->convert_content( $old_excerpt );
 					break;
-				case 'restore_media_full':
+				case self::ACTION_RESTORE_MEDIA_FULL:
 					$new_content = JRMU_Converter::instance()->restore_content_to_domain( $old_content, $target_base );
 					$new_excerpt = JRMU_Converter::instance()->restore_content_to_domain( $old_excerpt, $target_base );
 					break;
-				case 'internal_to_target':
+				case self::ACTION_INTERNAL_TO_TARGET:
 					$new_content = JRMU_Domain_Adapter::instance()->rewrite_html_to_domain( $old_content, $target_base );
 					$new_excerpt = JRMU_Domain_Adapter::instance()->rewrite_html_to_domain( $old_excerpt, $target_base );
 					break;
-				case 'internal_to_relative':
+				case self::ACTION_INTERNAL_TO_RELATIVE:
 					$new_content = JRMU_Domain_Adapter::instance()->rewrite_html_to_relative( $old_content );
 					$new_excerpt = JRMU_Domain_Adapter::instance()->rewrite_html_to_relative( $old_excerpt );
 					break;
-				case 'fix_mixed_https':
+				case self::ACTION_FIX_MIXED_HTTPS:
 					$new_content = $this->fix_mixed_content( $old_content );
 					$new_excerpt = $this->fix_mixed_content( $old_excerpt );
 					break;
 			}
 
-			if ( $new_content !== $old_content || $new_excerpt !== $old_excerpt ) {
-				wp_update_post(
-					array(
-						'ID'           => $post_id,
-						'post_content' => $new_content,
-						'post_excerpt' => $new_excerpt,
-					)
-				);
-				++$updated;
+			if ( $new_content === $old_content && $new_excerpt === $old_excerpt ) {
+				++$skipped;
+				continue;
 			}
+
+			if ( function_exists( 'wp_save_post_revision' ) && post_type_supports( $post->post_type, 'revisions' ) ) {
+				wp_save_post_revision( $post_id );
+			}
+
+			$result = wp_update_post(
+				array(
+					'ID'           => $post_id,
+					'post_content' => $new_content,
+					'post_excerpt' => $new_excerpt,
+				),
+				true
+			);
+			if ( is_wp_error( $result ) ) {
+				++$skipped;
+				$errors[] = '文章 ID ' . $post_id . ' 更新失败：' . $result->get_error_message();
+				continue;
+			}
+			++$updated;
 		}
 
-		$this->add_log( $action, count( $post_ids ), $updated, $target_base );
-		return array( 'requested' => count( $post_ids ), 'updated' => $updated );
+		delete_transient( $lock_key );
+		$this->add_log( $action, count( $post_ids ), $updated, $target_base, $skipped, $errors );
+		return array( 'requested' => count( $post_ids ), 'updated' => $updated, 'skipped' => $skipped, 'errors' => $errors );
 	}
 
 	/** 混合内容样本。 */
@@ -259,7 +342,7 @@ class JRMU_Scanner {
 	}
 
 	/** 写日志。 */
-	public function add_log( $action, $requested, $updated, $target_base = '' ) {
+	public function add_log( $action, $requested, $updated, $target_base = '', $skipped = 0, $errors = array() ) {
 		$logs = get_option( JRMU_LOG_OPTION_KEY, array() );
 		$logs = is_array( $logs ) ? $logs : array();
 		array_unshift(
@@ -269,10 +352,12 @@ class JRMU_Scanner {
 				'action'      => sanitize_key( $action ),
 				'requested'   => absint( $requested ),
 				'updated'     => absint( $updated ),
+				'skipped'     => absint( $skipped ),
+				'errors'      => array_slice( array_map( 'sanitize_text_field', (array) $errors ), 0, 10 ),
 				'target_base' => esc_url_raw( $target_base ),
 			)
 		);
-		$logs = array_slice( $logs, 0, 50 );
+		$logs = array_slice( $logs, 0, 80 );
 		update_option( JRMU_LOG_OPTION_KEY, $logs, false );
 	}
 

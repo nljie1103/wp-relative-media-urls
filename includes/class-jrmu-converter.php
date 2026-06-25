@@ -290,6 +290,17 @@ class JRMU_Converter {
 			}
 		}
 
+		// 同时读取数据库原始 home/siteurl，避免多域名动态适配开启后只识别当前入口域名。
+		$alloptions = wp_load_alloptions();
+		foreach ( array( 'home', 'siteurl' ) as $option_key ) {
+			if ( ! empty( $alloptions[ $option_key ] ) ) {
+				$host = wp_parse_url( $alloptions[ $option_key ], PHP_URL_HOST );
+				if ( $host ) {
+					$hosts[] = strtolower( $host );
+				}
+			}
+		}
+
 		foreach ( array( 'extra_hosts', 'domain_allowed_hosts' ) as $key ) {
 			if ( ! empty( $options[ $key ] ) ) {
 				$lines = preg_split( '/\r\n|\r|\n/', $options[ $key ] );
