@@ -1,88 +1,56 @@
-# 九流媒体相对地址（Jiuliu Relative Media URLs）
+# 九流媒体相对地址
 
-WordPress 媒体 URL 根相对化插件。将同站点的媒体库绝对地址，例如：
+将 WordPress 媒体库输出与文章内容中的同站点媒体绝对地址转换为根相对地址，适合反向代理、缓存节点、源站隐藏、多入口域名等场景。
 
-```text
-https://blog.example.com/wp-content/uploads/2026/06/a.jpg
+## 2.0.0 设计原则
+
+第二版采用安全默认策略：插件启用后默认不转换任何地址，不改变媒体库显示，不改变前台输出，也不修改数据库。用户必须进入设置页手动开启对应模块。
+
+插件把功能拆成两个对象：
+
+1. 媒体库地址：影响媒体库、编辑器、附件 URL API、特色图、srcset 等输出。
+2. 文章内容地址：影响 `post_content` / `post_excerpt` 中已经插入的图片地址。
+
+同时又分成两个时间维度：
+
+1. 已存在内容：已上传媒体、已发布文章。
+2. 未来内容：开启后新上传媒体、今后保存的文章。
+
+## 功能
+
+- 已上传媒体输出转换：可逆输出层转换，不移动文件、不改核心。
+- 未来上传媒体输出转换：开启后新上传附件会被标记，之后输出相对地址。
+- 保存文章时转换：未来保存文章时，将内容里的同站点媒体绝对 URL 保存为根相对路径。
+- 前台临时输出转换：旧文章前台显示时临时转换，不改数据库。
+- 历史文章扫描：扫描、预览、勾选指定文章后转换。
+- 域名白名单：支持添加源站域名、旧域名。
+- 路径范围控制：默认只处理 `/wp-content/uploads/`。
+
+## 示例
+
+```html
+<img src="https://example.com/wp-content/uploads/2026/06/a.jpg">
 ```
 
-自动转换为：
-
-```text
-/wp-content/uploads/2026/06/a.jpg
-```
-
-适合美国源站 + 香港 Nginx 反向代理缓存、源站隐藏、域名切换、多入口访问等场景。
-
-## 核心特性
-
-- 零核心修改，不修改 WordPress 源码。
-- 保存文章时转换正文与摘要中的媒体绝对 URL。
-- 前台输出兜底转换旧文章内容。
-- 可选转换 `wp_get_attachment_url`、媒体库弹窗返回值、响应式图片 `srcset`。
-- 只转换白名单域名 + 白名单路径，外链图片不会被动。
-- 支持额外源站域名，例如 `origin-blog.example.com`。
-- 后台提供手动批量转换现有文章功能。
-- 卸载自动清理插件设置，不删除文章内容和媒体文件。
-
-## 推荐用法
-
-正式入口域名：
-
-```text
-blog.example.com
-```
-
-美国源站域名：
-
-```text
-origin-blog.example.com
-```
-
-插件后台把 `origin-blog.example.com` 加入“额外源站域名”，然后启用保存/输出转换。
-
-文章中保存为：
+转换为：
 
 ```html
 <img src="/wp-content/uploads/2026/06/a.jpg">
 ```
 
-用户从 `blog.example.com` 访问时，浏览器会自动补成：
+浏览器会根据当前访问域名自动补全资源地址，适合香港反代缓存、美国源站运行的部署方式。
 
-```text
-https://blog.example.com/wp-content/uploads/2026/06/a.jpg
-```
+## 安装
 
-从而走香港反代缓存，而不是直连美国源站。
+1. 上传插件压缩包到 WordPress 后台。
+2. 启用插件。
+3. 进入“媒体相对地址”。
+4. 按需开启媒体库模块或文章内容模块。
 
-## 目录结构
+## 注意
 
-```text
-jiuliu-relative-media-urls/
-├── jiuliu-relative-media-urls.php
-├── uninstall.php
-├── readme.txt
-├── README.md
-├── index.php
-├── includes/
-│   ├── class-jrmu-settings.php
-│   ├── class-jrmu-converter.php
-│   ├── class-jrmu-admin.php
-│   └── index.php
-├── assets/
-│   ├── index.php
-│   └── css/
-│       ├── admin.css
-│       └── index.php
-└── languages/
-    └── index.php
-```
-
-## 环境要求
-
-- WordPress 5.8+
-- PHP 7.4+
-
-## License
-
-GPLv2 or later
+- 默认不会修改数据库。
+- 历史文章转换只会修改你勾选的文章正文/摘要。
+- 批量转换前建议备份数据库。
+- 不建议修改附件 `guid`。
+- 默认不要开启主题/插件目录转换，除非你确认缓存策略没问题。

@@ -17,26 +17,51 @@ class JRMU_Settings {
 	/**
 	 * 获取默认配置。
 	 *
+	 * 默认所有转换均关闭，用户必须进入设置页手动开启。
+	 *
 	 * @return array
 	 */
 	public static function get_defaults() {
 		return array(
-			'enabled'                  => 1,
-			'convert_on_save'          => 1,
-			'convert_on_output'        => 1,
-			'convert_attachment_urls'  => 1,
-			'convert_srcset'           => 1,
-			'convert_admin_media_js'   => 1,
-			'target_uploads'           => 1,
-			'target_themes'            => 0,
-			'target_plugins'           => 0,
-			'extra_hosts'              => '',
-			'batch_limit'              => 200,
+			// 媒体库模块。
+			'convert_existing_media_output' => 0,
+			'convert_future_media_output'   => 0,
+			'future_media_enabled_at'       => 0,
+
+			// 文章内容模块。
+			'convert_post_on_save'          => 0,
+			'convert_post_on_frontend'      => 0,
+
+			// 转换范围。
+			'target_uploads'                => 1,
+			'target_themes'                 => 0,
+			'target_plugins'                => 0,
+			'extra_hosts'                   => '',
+
+			// 历史文章扫描。
+			'scan_limit'                    => 100,
 		);
 	}
 
 	/**
-	 * 获取当前设置，与默认值合并。
+	 * 布尔设置键。
+	 *
+	 * @return array
+	 */
+	public static function get_boolean_keys() {
+		return array(
+			'convert_existing_media_output',
+			'convert_future_media_output',
+			'convert_post_on_save',
+			'convert_post_on_frontend',
+			'target_uploads',
+			'target_themes',
+			'target_plugins',
+		);
+	}
+
+	/**
+	 * 获取设置。
 	 *
 	 * @return array
 	 */
@@ -57,36 +82,35 @@ class JRMU_Settings {
 	 * @return array
 	 */
 	public static function sanitize( $input ) {
+		$old      = self::get_options();
 		$defaults = self::get_defaults();
 		$output   = array();
+		$input    = is_array( $input ) ? $input : array();
 
-		$input = is_array( $input ) ? $input : array();
+		foreach ( self::get_boolean_keys() as $key ) {
+			$output[ $key ] = ! empty( $input[ $key ] ) ? 1 : 0;
+		}
 
-		$output['enabled']                 = ! empty( $input['enabled'] ) ? 1 : 0;
-		$output['convert_on_save']         = ! empty( $input['convert_on_save'] ) ? 1 : 0;
-		$output['convert_on_output']       = ! empty( $input['convert_on_output'] ) ? 1 : 0;
-		$output['convert_attachment_urls'] = ! empty( $input['convert_attachment_urls'] ) ? 1 : 0;
-		$output['convert_srcset']          = ! empty( $input['convert_srcset'] ) ? 1 : 0;
-		$output['convert_admin_media_js']  = ! empty( $input['convert_admin_media_js'] ) ? 1 : 0;
-		$output['target_uploads']          = ! empty( $input['target_uploads'] ) ? 1 : 0;
-		$output['target_themes']           = ! empty( $input['target_themes'] ) ? 1 : 0;
-		$output['target_plugins']          = ! empty( $input['target_plugins'] ) ? 1 : 0;
-
-		// 至少启用 uploads，避免误保存成完全不转换。
+		// 至少保留 uploads 作为默认转换范围，避免保存后没有任何目标路径。
 		if ( empty( $output['target_uploads'] ) && empty( $output['target_themes'] ) && empty( $output['target_plugins'] ) ) {
 			$output['target_uploads'] = 1;
 		}
 
+		// 未来媒体开关首次开启时记录时间。关闭后清零，重新开启则重新计算“未来”。
+		if ( ! empty( $output['convert_future_media_output'] ) ) {
+			$output['future_media_enabled_at'] = ! empty( $old['convert_future_media_output'] ) && ! empty( $old['future_media_enabled_at'] ) ? absint( $old['future_media_enabled_at'] ) : time();
+		} else {
+			$output['future_media_enabled_at'] = 0;
+		}
+
 		$output['extra_hosts'] = isset( $input['extra_hosts'] ) ? self::sanitize_extra_hosts( wp_unslash( $input['extra_hosts'] ) ) : '';
-		$output['batch_limit'] = isset( $input['batch_limit'] ) ? max( 20, min( 1000, absint( $input['batch_limit'] ) ) ) : $defaults['batch_limit'];
+		$output['scan_limit']  = isset( $input['scan_limit'] ) ? max( 10, min( 500, absint( $input['scan_limit'] ) ) ) : $defaults['scan_limit'];
 
 		return $output;
 	}
 
 	/**
 	 * 清洗额外域名列表。
-	 *
-	 * 支持填写域名或完整 URL，每行一个。
 	 *
 	 * @param string $raw 原始文本。
 	 * @return string
@@ -103,7 +127,6 @@ class JRMU_Settings {
 				continue;
 			}
 
-			// 允许用户输入 https://origin.example.com/path，也允许只输入 origin.example.com。
 			if ( false === strpos( $line, '://' ) ) {
 				$line = 'https://' . $line;
 			}
@@ -122,8 +145,6 @@ class JRMU_Settings {
 			}
 		}
 
-		$hosts = array_values( array_unique( $hosts ) );
-
-		return implode( "\n", $hosts );
+		return implode( "\n", array_values( array_unique( $hosts ) ) );
 	}
 }

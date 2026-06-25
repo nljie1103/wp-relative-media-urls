@@ -22,7 +22,7 @@ class JRMU_Converter {
 	private static $instance = null;
 
 	/**
-	 * 获取单例实例。
+	 * 获取单例。
 	 *
 	 * @return JRMU_Converter
 	 */
@@ -47,36 +47,96 @@ class JRMU_Converter {
 	private function init_hooks() {
 		$options = JRMU_Settings::get_options();
 
-		if ( empty( $options['enabled'] ) ) {
-			return;
-		}
-
-		if ( ! empty( $options['convert_on_save'] ) ) {
+		if ( ! empty( $options['convert_post_on_save'] ) ) {
 			add_filter( 'content_save_pre', array( $this, 'convert_content' ), 99 );
 			add_filter( 'excerpt_save_pre', array( $this, 'convert_content' ), 99 );
 		}
 
-		if ( ! empty( $options['convert_on_output'] ) ) {
+		if ( ! empty( $options['convert_post_on_frontend'] ) ) {
 			add_filter( 'the_content', array( $this, 'convert_content' ), 99 );
 			add_filter( 'the_excerpt', array( $this, 'convert_content' ), 99 );
 			add_filter( 'widget_text', array( $this, 'convert_content' ), 99 );
 			add_filter( 'widget_text_content', array( $this, 'convert_content' ), 99 );
-			add_filter( 'post_thumbnail_html', array( $this, 'convert_content' ), 99 );
 			add_filter( 'render_block', array( $this, 'convert_content' ), 99 );
 		}
 
-		if ( ! empty( $options['convert_attachment_urls'] ) ) {
-			add_filter( 'wp_get_attachment_url', array( $this, 'convert_url' ), 99 );
-			add_filter( 'wp_get_attachment_image_attributes', array( $this, 'convert_attachment_image_attributes' ), 99 );
+		if ( ! empty( $options['convert_existing_media_output'] ) || ! empty( $options['convert_future_media_output'] ) ) {
+			add_filter( 'wp_get_attachment_url', array( $this, 'convert_attachment_url' ), 99, 2 );
+			add_filter( 'wp_get_attachment_image_attributes', array( $this, 'convert_attachment_image_attributes' ), 99, 3 );
+			add_filter( 'wp_calculate_image_srcset', array( $this, 'convert_srcset' ), 99, 5 );
+			add_filter( 'wp_prepare_attachment_for_js', array( $this, 'convert_attachment_for_js' ), 99, 3 );
+			add_filter( 'post_thumbnail_html', array( $this, 'convert_content' ), 99 );
 		}
 
-		if ( ! empty( $options['convert_srcset'] ) ) {
-			add_filter( 'wp_calculate_image_srcset', array( $this, 'convert_srcset' ), 99 );
+		if ( ! empty( $options['convert_future_media_output'] ) ) {
+			add_action( 'add_attachment', array( $this, 'mark_new_attachment' ), 10, 1 );
+		}
+	}
+
+	/**
+	 * 标记开启“未来媒体相对地址”后上传的新附件。
+	 *
+	 * @param int $attachment_id 附件 ID。
+	 */
+	public function mark_new_attachment( $attachment_id ) {
+		$attachment_id = absint( $attachment_id );
+
+		if ( ! $attachment_id ) {
+			return;
 		}
 
-		if ( ! empty( $options['convert_admin_media_js'] ) ) {
-			add_filter( 'wp_prepare_attachment_for_js', array( $this, 'convert_attachment_for_js' ), 99 );
+		update_post_meta( $attachment_id, JRMU_ATTACHMENT_META_KEY, time() );
+	}
+
+	/**
+	 * 判断附件是否应该转换 URL。
+	 *
+	 * @param int $attachment_id 附件 ID。
+	 * @return bool
+	 */
+	public function should_convert_attachment( $attachment_id ) {
+		$options = JRMU_Settings::get_options();
+
+		if ( ! empty( $options['convert_existing_media_output'] ) ) {
+			return true;
 		}
+
+		if ( empty( $options['convert_future_media_output'] ) ) {
+			return false;
+		}
+
+		$attachment_id = absint( $attachment_id );
+
+		if ( ! $attachment_id ) {
+			return false;
+		}
+
+		$marked_at = absint( get_post_meta( $attachment_id, JRMU_ATTACHMENT_META_KEY, true ) );
+
+		if ( $marked_at > 0 ) {
+			return true;
+		}
+
+		// 兜底：如果插件开启后上传，但 add_attachment 没来得及标记，也按附件发布时间判断。
+		$enabled_at = ! empty( $options['future_media_enabled_at'] ) ? absint( $options['future_media_enabled_at'] ) : 0;
+		$post_time  = get_post_time( 'U', true, $attachment_id );
+
+		return $enabled_at > 0 && $post_time && $post_time >= $enabled_at;
+	}
+
+	/**
+	 * 转换附件 URL。
+	 *
+	 * @param string $url           附件 URL。
+	 * @param int    $attachment_id 附件 ID。
+	 * @return string
+	 */
+	public function convert_attachment_url( $url, $attachment_id = 0 ) {
+		if ( ! $this->should_convert_attachment( $attachment_id ) ) {
+			return $url;
+		}
+
+		return $this->convert_url( $url );
 	}
 
 	/**
@@ -91,7 +151,7 @@ class JRMU_Converter {
 		}
 
 		$converted = preg_replace_callback(
-			'#https?://[^\s"\'<>\)]+#i',
+			'#https?://[^\s"\'<>)]+#i',
 			array( $this, 'convert_url_match' ),
 			$content
 		);
@@ -113,10 +173,6 @@ class JRMU_Converter {
 
 	/**
 	 * 将符合条件的绝对 URL 转换为根相对 URL。
-	 *
-	 * 只转换：
-	 * 1. 当前站点域名、siteurl 域名或额外白名单域名；
-	 * 2. 指定目标路径，例如 /wp-content/uploads/。
 	 *
 	 * @param string $url 原始 URL。
 	 * @return string
@@ -164,11 +220,15 @@ class JRMU_Converter {
 	/**
 	 * 转换 srcset 数组。
 	 *
-	 * @param array|false $sources srcset sources。
+	 * @param array|false $sources       sources。
+	 * @param array       $size_array    尺寸。
+	 * @param string      $image_src     图片地址。
+	 * @param array       $image_meta    图片元数据。
+	 * @param int         $attachment_id 附件 ID。
 	 * @return array|false
 	 */
-	public function convert_srcset( $sources ) {
-		if ( ! is_array( $sources ) ) {
+	public function convert_srcset( $sources, $size_array = array(), $image_src = '', $image_meta = array(), $attachment_id = 0 ) {
+		if ( ! is_array( $sources ) || ! $this->should_convert_attachment( $attachment_id ) ) {
 			return $sources;
 		}
 
@@ -184,11 +244,15 @@ class JRMU_Converter {
 	/**
 	 * 转换 wp_get_attachment_image_attributes 返回值。
 	 *
-	 * @param array $attr 图片属性。
+	 * @param array   $attr       图片属性。
+	 * @param WP_Post $attachment 附件对象。
+	 * @param string  $size       尺寸。
 	 * @return array
 	 */
-	public function convert_attachment_image_attributes( $attr ) {
-		if ( ! is_array( $attr ) ) {
+	public function convert_attachment_image_attributes( $attr, $attachment = null, $size = '' ) {
+		$attachment_id = isset( $attachment->ID ) ? absint( $attachment->ID ) : 0;
+
+		if ( ! is_array( $attr ) || ! $this->should_convert_attachment( $attachment_id ) ) {
 			return $attr;
 		}
 
@@ -208,11 +272,15 @@ class JRMU_Converter {
 	/**
 	 * 转换媒体库弹窗 JS 响应。
 	 *
-	 * @param array $response 附件响应。
+	 * @param array   $response   附件响应。
+	 * @param WP_Post $attachment 附件对象。
+	 * @param array   $meta       元数据。
 	 * @return array
 	 */
-	public function convert_attachment_for_js( $response ) {
-		if ( ! is_array( $response ) ) {
+	public function convert_attachment_for_js( $response, $attachment = null, $meta = array() ) {
+		$attachment_id = isset( $attachment->ID ) ? absint( $attachment->ID ) : 0;
+
+		if ( ! is_array( $response ) || ! $this->should_convert_attachment( $attachment_id ) ) {
 			return $response;
 		}
 
@@ -273,11 +341,6 @@ class JRMU_Converter {
 
 		$hosts = array_filter( array_unique( $hosts ) );
 
-		/**
-		 * 过滤允许转换的域名列表。
-		 *
-		 * @param array $hosts 域名列表。
-		 */
 		return apply_filters( 'jrmu_allowed_hosts', array_values( $hosts ) );
 	}
 
@@ -326,11 +389,6 @@ class JRMU_Converter {
 		$paths = array_map( array( $this, 'normalize_path_prefix' ), $paths );
 		$paths = array_filter( array_unique( $paths ) );
 
-		/**
-		 * 过滤允许转换的路径前缀。
-		 *
-		 * @param array $paths 路径前缀。
-		 */
 		return apply_filters( 'jrmu_allowed_paths', array_values( $paths ) );
 	}
 
@@ -350,6 +408,72 @@ class JRMU_Converter {
 		}
 
 		return false;
+	}
+
+	/**
+	 * 统计内容中可转换 URL 的数量。
+	 *
+	 * @param string $content 内容。
+	 * @return int
+	 */
+	public function count_convertible_urls( $content ) {
+		if ( ! is_string( $content ) || '' === $content ) {
+			return 0;
+		}
+
+		$count = 0;
+		preg_replace_callback(
+			'#https?://[^\s"\'<>)]+#i',
+			function ( $matches ) use ( &$count ) {
+				$url = isset( $matches[0] ) ? $matches[0] : '';
+				if ( $url && $this->convert_url( $url ) !== $url ) {
+					++$count;
+				}
+				return $url;
+			},
+			$content
+		);
+
+		return $count;
+	}
+
+	/**
+	 * 获取内容中可转换 URL 预览。
+	 *
+	 * @param string $content 内容。
+	 * @param int    $limit   数量。
+	 * @return array
+	 */
+	public function get_convertible_url_samples( $content, $limit = 3 ) {
+		$samples = array();
+
+		if ( ! is_string( $content ) || '' === $content ) {
+			return $samples;
+		}
+
+		preg_replace_callback(
+			'#https?://[^\s"\'<>)]+#i',
+			function ( $matches ) use ( &$samples, $limit ) {
+				if ( count( $samples ) >= $limit ) {
+					return isset( $matches[0] ) ? $matches[0] : '';
+				}
+
+				$url       = isset( $matches[0] ) ? $matches[0] : '';
+				$converted = $this->convert_url( $url );
+
+				if ( $url && $converted !== $url ) {
+					$samples[] = array(
+						'from' => $url,
+						'to'   => $converted,
+					);
+				}
+
+				return $url;
+			},
+			$content
+		);
+
+		return $samples;
 	}
 
 	/**
