@@ -13,12 +13,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * JRMU_Converter
  */
 class JRMU_Converter {
-
-	/**
-	 * 单例实例。
-	 *
-	 * @var JRMU_Converter|null
-	 */
+	/** @var JRMU_Converter|null */
 	private static $instance = null;
 
 	/**
@@ -30,20 +25,15 @@ class JRMU_Converter {
 		if ( null === self::$instance ) {
 			self::$instance = new self();
 		}
-
 		return self::$instance;
 	}
 
-	/**
-	 * 构造函数。
-	 */
+	/** 构造函数。 */
 	private function __construct() {
 		$this->init_hooks();
 	}
 
-	/**
-	 * 初始化转换钩子。
-	 */
+	/** 初始化转换钩子。 */
 	private function init_hooks() {
 		$options = JRMU_Settings::get_options();
 
@@ -74,22 +64,19 @@ class JRMU_Converter {
 	}
 
 	/**
-	 * 标记开启“未来媒体相对地址”后上传的新附件。
+	 * 标记新附件。
 	 *
 	 * @param int $attachment_id 附件 ID。
 	 */
 	public function mark_new_attachment( $attachment_id ) {
 		$attachment_id = absint( $attachment_id );
-
-		if ( ! $attachment_id ) {
-			return;
+		if ( $attachment_id ) {
+			update_post_meta( $attachment_id, JRMU_ATTACHMENT_META_KEY, time() );
 		}
-
-		update_post_meta( $attachment_id, JRMU_ATTACHMENT_META_KEY, time() );
 	}
 
 	/**
-	 * 判断附件是否应该转换 URL。
+	 * 判断附件是否应转换。
 	 *
 	 * @param int $attachment_id 附件 ID。
 	 * @return bool
@@ -106,18 +93,15 @@ class JRMU_Converter {
 		}
 
 		$attachment_id = absint( $attachment_id );
-
 		if ( ! $attachment_id ) {
 			return false;
 		}
 
 		$marked_at = absint( get_post_meta( $attachment_id, JRMU_ATTACHMENT_META_KEY, true ) );
-
 		if ( $marked_at > 0 ) {
 			return true;
 		}
 
-		// 兜底：如果插件开启后上传，但 add_attachment 没来得及标记，也按附件发布时间判断。
 		$enabled_at = ! empty( $options['future_media_enabled_at'] ) ? absint( $options['future_media_enabled_at'] ) : 0;
 		$post_time  = get_post_time( 'U', true, $attachment_id );
 
@@ -127,22 +111,18 @@ class JRMU_Converter {
 	/**
 	 * 转换附件 URL。
 	 *
-	 * @param string $url           附件 URL。
+	 * @param string $url URL。
 	 * @param int    $attachment_id 附件 ID。
 	 * @return string
 	 */
 	public function convert_attachment_url( $url, $attachment_id = 0 ) {
-		if ( ! $this->should_convert_attachment( $attachment_id ) ) {
-			return $url;
-		}
-
-		return $this->convert_url( $url );
+		return $this->should_convert_attachment( $attachment_id ) ? $this->convert_url( $url ) : $url;
 	}
 
 	/**
-	 * 转换一段 HTML/文本内容中的绝对 URL。
+	 * 转换内容中的绝对媒体 URL 为根相对 URL。
 	 *
-	 * @param string $content 原始内容。
+	 * @param string $content 内容。
 	 * @return string
 	 */
 	public function convert_content( $content ) {
@@ -152,7 +132,10 @@ class JRMU_Converter {
 
 		$converted = preg_replace_callback(
 			'#https?://[^\s"\'<>)]+#i',
-			array( $this, 'convert_url_match' ),
+			function ( $matches ) {
+				$url = isset( $matches[0] ) ? $matches[0] : '';
+				return $this->convert_url( $url );
+			},
 			$content
 		);
 
@@ -160,56 +143,30 @@ class JRMU_Converter {
 	}
 
 	/**
-	 * preg_replace_callback 回调。
-	 *
-	 * @param array $matches 匹配项。
-	 * @return string
-	 */
-	public function convert_url_match( $matches ) {
-		$url = isset( $matches[0] ) ? $matches[0] : '';
-
-		return $this->convert_url( $url );
-	}
-
-	/**
-	 * 将符合条件的绝对 URL 转换为根相对 URL。
+	 * 将绝对 URL 转根相对。
 	 *
 	 * @param string $url 原始 URL。
 	 * @return string
 	 */
 	public function convert_url( $url ) {
-		if ( ! is_string( $url ) || '' === $url ) {
-			return $url;
-		}
-
-		if ( ! preg_match( '#^https?://#i', $url ) ) {
+		if ( ! is_string( $url ) || '' === $url || ! preg_match( '#^https?://#i', $url ) ) {
 			return $url;
 		}
 
 		$parts = wp_parse_url( $url );
-
 		if ( empty( $parts['host'] ) || empty( $parts['path'] ) ) {
 			return $url;
 		}
 
 		$host = strtolower( $parts['host'] );
-
-		if ( ! $this->is_allowed_host( $host ) ) {
+		if ( ! $this->is_allowed_host( $host ) || ! $this->is_allowed_path( $parts['path'] ) ) {
 			return $url;
 		}
 
-		$path = $parts['path'];
-
-		if ( ! $this->is_allowed_path( $path ) ) {
-			return $url;
-		}
-
-		$relative = $path;
-
+		$relative = $parts['path'];
 		if ( isset( $parts['query'] ) && '' !== $parts['query'] ) {
 			$relative .= '?' . $parts['query'];
 		}
-
 		if ( isset( $parts['fragment'] ) && '' !== $parts['fragment'] ) {
 			$relative .= '#' . $parts['fragment'];
 		}
@@ -218,80 +175,95 @@ class JRMU_Converter {
 	}
 
 	/**
-	 * 转换 srcset 数组。
+	 * 恢复内容中的根相对媒体 URL 为完整 URL。
 	 *
-	 * @param array|false $sources       sources。
-	 * @param array       $size_array    尺寸。
-	 * @param string      $image_src     图片地址。
-	 * @param array       $image_meta    图片元数据。
-	 * @param int         $attachment_id 附件 ID。
-	 * @return array|false
+	 * @param string $content 内容。
+	 * @param string $base_url 目标基础 URL。
+	 * @return string
+	 */
+	public function restore_content_to_domain( $content, $base_url ) {
+		if ( ! is_string( $content ) || '' === $content ) {
+			return $content;
+		}
+
+		$base_url = untrailingslashit( esc_url_raw( $base_url ) );
+		if ( ! $base_url || ! preg_match( '#^https?://#i', $base_url ) ) {
+			return $content;
+		}
+
+		$paths = array();
+		foreach ( $this->get_allowed_paths() as $path_prefix ) {
+			$paths[] = preg_quote( ltrim( $path_prefix, '/' ), '#' );
+		}
+		if ( empty( $paths ) ) {
+			return $content;
+		}
+
+		$pattern = '#(^|["\'\s\(,=])(/(?:' . implode( '|', $paths ) . ')[^"\'\s<>)]+)#i';
+		$restored = preg_replace_callback(
+			$pattern,
+			function ( $matches ) use ( $base_url ) {
+				$prefix = isset( $matches[1] ) ? $matches[1] : '';
+				$path   = isset( $matches[2] ) ? $matches[2] : '';
+				if ( preg_match( '#^https?://#i', $path ) ) {
+					return $matches[0];
+				}
+				return $prefix . $base_url . $path;
+			},
+			$content
+		);
+
+		return is_string( $restored ) ? $restored : $content;
+	}
+
+	/**
+	 * 转换 srcset。
 	 */
 	public function convert_srcset( $sources, $size_array = array(), $image_src = '', $image_meta = array(), $attachment_id = 0 ) {
 		if ( ! is_array( $sources ) || ! $this->should_convert_attachment( $attachment_id ) ) {
 			return $sources;
 		}
-
 		foreach ( $sources as &$source ) {
 			if ( isset( $source['url'] ) ) {
 				$source['url'] = $this->convert_url( $source['url'] );
 			}
 		}
-
 		return $sources;
 	}
 
 	/**
-	 * 转换 wp_get_attachment_image_attributes 返回值。
-	 *
-	 * @param array   $attr       图片属性。
-	 * @param WP_Post $attachment 附件对象。
-	 * @param string  $size       尺寸。
-	 * @return array
+	 * 转换图片属性。
 	 */
 	public function convert_attachment_image_attributes( $attr, $attachment = null, $size = '' ) {
 		$attachment_id = isset( $attachment->ID ) ? absint( $attachment->ID ) : 0;
-
 		if ( ! is_array( $attr ) || ! $this->should_convert_attachment( $attachment_id ) ) {
 			return $attr;
 		}
 
-		foreach ( array( 'src', 'data-src', 'data-lazy-src' ) as $key ) {
+		foreach ( array( 'src', 'data-src', 'data-lazy-src', 'data-original' ) as $key ) {
 			if ( isset( $attr[ $key ] ) ) {
 				$attr[ $key ] = $this->convert_url( $attr[ $key ] );
 			}
 		}
-
 		if ( isset( $attr['srcset'] ) && is_string( $attr['srcset'] ) ) {
 			$attr['srcset'] = $this->convert_content( $attr['srcset'] );
 		}
-
 		return $attr;
 	}
 
 	/**
-	 * 转换媒体库弹窗 JS 响应。
-	 *
-	 * @param array   $response   附件响应。
-	 * @param WP_Post $attachment 附件对象。
-	 * @param array   $meta       元数据。
-	 * @return array
+	 * 转换媒体库 JS 响应。
 	 */
 	public function convert_attachment_for_js( $response, $attachment = null, $meta = array() ) {
 		$attachment_id = isset( $attachment->ID ) ? absint( $attachment->ID ) : 0;
-
 		if ( ! is_array( $response ) || ! $this->should_convert_attachment( $attachment_id ) ) {
 			return $response;
 		}
-
-		if ( isset( $response['url'] ) ) {
-			$response['url'] = $this->convert_url( $response['url'] );
+		foreach ( array( 'url', 'link' ) as $key ) {
+			if ( isset( $response[ $key ] ) ) {
+				$response[ $key ] = $this->convert_url( $response[ $key ] );
+			}
 		}
-
-		if ( isset( $response['link'] ) ) {
-			$response['link'] = $this->convert_url( $response['link'] );
-		}
-
 		if ( isset( $response['sizes'] ) && is_array( $response['sizes'] ) ) {
 			foreach ( $response['sizes'] as &$size ) {
 				if ( isset( $size['url'] ) ) {
@@ -299,12 +271,11 @@ class JRMU_Converter {
 				}
 			}
 		}
-
 		return $response;
 	}
 
 	/**
-	 * 获取允许转换的域名列表。
+	 * 允许转换的域名。
 	 *
 	 * @return array
 	 */
@@ -312,52 +283,37 @@ class JRMU_Converter {
 		$options = JRMU_Settings::get_options();
 		$hosts   = array();
 
-		foreach ( array( home_url(), site_url(), content_url(), includes_url() ) as $url ) {
+		foreach ( array( home_url(), site_url(), content_url(), includes_url(), network_home_url() ) as $url ) {
 			$host = wp_parse_url( $url, PHP_URL_HOST );
-
 			if ( $host ) {
 				$hosts[] = strtolower( $host );
 			}
 		}
 
-		if ( is_multisite() ) {
-			$network_host = wp_parse_url( network_home_url(), PHP_URL_HOST );
-			if ( $network_host ) {
-				$hosts[] = strtolower( $network_host );
-			}
-		}
-
-		if ( ! empty( $options['extra_hosts'] ) ) {
-			$lines = preg_split( '/\r\n|\r|\n/', $options['extra_hosts'] );
-
-			foreach ( $lines as $line ) {
-				$line = strtolower( trim( $line ) );
-
-				if ( $line ) {
-					$hosts[] = $line;
+		foreach ( array( 'extra_hosts', 'domain_allowed_hosts' ) as $key ) {
+			if ( ! empty( $options[ $key ] ) ) {
+				$lines = preg_split( '/\r\n|\r|\n/', $options[ $key ] );
+				foreach ( $lines as $line ) {
+					$line = strtolower( trim( $line ) );
+					if ( $line ) {
+						$hosts[] = $line;
+					}
 				}
 			}
 		}
 
-		$hosts = array_filter( array_unique( $hosts ) );
-
-		return apply_filters( 'jrmu_allowed_hosts', array_values( $hosts ) );
+		return apply_filters( 'jrmu_allowed_hosts', array_values( array_filter( array_unique( $hosts ) ) ) );
 	}
 
 	/**
-	 * 判断域名是否允许转换。
-	 *
-	 * @param string $host 域名。
-	 * @return bool
+	 * 判断域名是否允许。
 	 */
 	public function is_allowed_host( $host ) {
-		$host = strtolower( (string) $host );
-
-		return in_array( $host, $this->get_allowed_hosts(), true );
+		return in_array( strtolower( (string) $host ), $this->get_allowed_hosts(), true );
 	}
 
 	/**
-	 * 获取允许转换的路径前缀。
+	 * 允许转换路径。
 	 *
 	 * @return array
 	 */
@@ -367,86 +323,49 @@ class JRMU_Converter {
 
 		if ( ! empty( $options['target_uploads'] ) ) {
 			$uploads = wp_get_upload_dir();
-
 			if ( ! empty( $uploads['baseurl'] ) ) {
 				$paths[] = wp_parse_url( $uploads['baseurl'], PHP_URL_PATH );
 			}
-
 			$paths[] = '/wp-content/uploads';
 		}
-
 		if ( ! empty( $options['target_themes'] ) ) {
 			$paths[] = wp_parse_url( content_url( 'themes' ), PHP_URL_PATH );
 			$paths[] = '/wp-content/themes';
 		}
-
 		if ( ! empty( $options['target_plugins'] ) ) {
 			$paths[] = wp_parse_url( plugins_url(), PHP_URL_PATH );
 			$paths[] = '/wp-content/plugins';
 		}
 
-		$paths = array_filter( $paths );
-		$paths = array_map( array( $this, 'normalize_path_prefix' ), $paths );
-		$paths = array_filter( array_unique( $paths ) );
-
-		return apply_filters( 'jrmu_allowed_paths', array_values( $paths ) );
+		$paths = array_filter( array_map( array( $this, 'normalize_path_prefix' ), $paths ) );
+		return apply_filters( 'jrmu_allowed_paths', array_values( array_unique( $paths ) ) );
 	}
 
 	/**
-	 * 判断路径是否允许转换。
-	 *
-	 * @param string $path URL path。
-	 * @return bool
+	 * 判断路径是否允许。
 	 */
 	public function is_allowed_path( $path ) {
 		$path = '/' . ltrim( (string) $path, '/' );
-
 		foreach ( $this->get_allowed_paths() as $prefix ) {
 			if ( 0 === strpos( $path, $prefix ) ) {
 				return true;
 			}
 		}
-
 		return false;
 	}
 
 	/**
-	 * 统计内容中可转换 URL 的数量。
-	 *
-	 * @param string $content 内容。
-	 * @return int
+	 * 统计可转换绝对媒体 URL。
 	 */
 	public function count_convertible_urls( $content ) {
-		if ( ! is_string( $content ) || '' === $content ) {
-			return 0;
-		}
-
-		$count = 0;
-		preg_replace_callback(
-			'#https?://[^\s"\'<>)]+#i',
-			function ( $matches ) use ( &$count ) {
-				$url = isset( $matches[0] ) ? $matches[0] : '';
-				if ( $url && $this->convert_url( $url ) !== $url ) {
-					++$count;
-				}
-				return $url;
-			},
-			$content
-		);
-
-		return $count;
+		return count( $this->get_convertible_url_samples( $content, 999999 ) );
 	}
 
 	/**
-	 * 获取内容中可转换 URL 预览。
-	 *
-	 * @param string $content 内容。
-	 * @param int    $limit   数量。
-	 * @return array
+	 * 获取可转换 URL 样本。
 	 */
-	public function get_convertible_url_samples( $content, $limit = 3 ) {
+	public function get_convertible_url_samples( $content, $limit = 5 ) {
 		$samples = array();
-
 		if ( ! is_string( $content ) || '' === $content ) {
 			return $samples;
 		}
@@ -457,17 +376,11 @@ class JRMU_Converter {
 				if ( count( $samples ) >= $limit ) {
 					return isset( $matches[0] ) ? $matches[0] : '';
 				}
-
 				$url       = isset( $matches[0] ) ? $matches[0] : '';
 				$converted = $this->convert_url( $url );
-
 				if ( $url && $converted !== $url ) {
-					$samples[] = array(
-						'from' => $url,
-						'to'   => $converted,
-					);
+					$samples[] = array( 'from' => $url, 'to' => $converted, 'type' => '媒体/静态资源' );
 				}
-
 				return $url;
 			},
 			$content
@@ -477,14 +390,37 @@ class JRMU_Converter {
 	}
 
 	/**
+	 * 获取可恢复的根相对媒体 URL 样本。
+	 */
+	public function get_restorable_url_samples( $content, $base_url, $limit = 5 ) {
+		$samples = array();
+		if ( ! is_string( $content ) || '' === $content ) {
+			return $samples;
+		}
+		$base_url = untrailingslashit( esc_url_raw( $base_url ) );
+		foreach ( $this->get_allowed_paths() as $prefix ) {
+			$pattern = '#(^|["\'\s\(,=])(' . preg_quote( $prefix, '#' ) . '/[^"\'\s<>)]+)#i';
+			preg_replace_callback(
+				$pattern,
+				function ( $matches ) use ( &$samples, $limit, $base_url ) {
+					if ( count( $samples ) >= $limit ) {
+						return $matches[0];
+					}
+					$path = isset( $matches[2] ) ? $matches[2] : '';
+					$samples[] = array( 'from' => $path, 'to' => $base_url . $path, 'type' => '恢复媒体 URL' );
+					return $matches[0];
+				},
+				$content
+			);
+		}
+		return $samples;
+	}
+
+	/**
 	 * 标准化路径前缀。
-	 *
-	 * @param string $path 路径。
-	 * @return string
 	 */
 	private function normalize_path_prefix( $path ) {
 		$path = '/' . trim( (string) $path, '/' );
-
 		return untrailingslashit( $path );
 	}
 }

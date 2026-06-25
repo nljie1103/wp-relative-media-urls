@@ -13,11 +13,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  * JRMU_Settings
  */
 class JRMU_Settings {
-
 	/**
-	 * 获取默认配置。
-	 *
-	 * 默认所有转换均关闭，用户必须进入设置页手动开启。
+	 * 获取默认设置。
 	 *
 	 * @return array
 	 */
@@ -33,15 +30,21 @@ class JRMU_Settings {
 			'convert_post_on_frontend'      => 0,
 
 			// 多域名访问适配模块。
-			'domain_adaptation_enabled'    => 0,
+			'domain_adaptation_enabled'     => 0,
 			'domain_dynamic_siteurl'        => 1,
 			'domain_rewrite_frontend_links' => 0,
-			'domain_exclude_admin'         => 1,
-			'domain_exclude_login'         => 1,
-			'domain_skip_system_endpoints' => 1,
-			'domain_mode'                  => 'whitelist',
-			'domain_scheme'                => 'https',
-			'domain_allowed_hosts'         => '',
+			'domain_rewrite_mode'           => 'current_full',
+			'domain_exclude_admin'          => 1,
+			'domain_exclude_login'          => 1,
+			'domain_skip_system_endpoints'  => 1,
+			'domain_mode'                   => 'whitelist',
+			'domain_scheme'                 => 'https',
+			'domain_allowed_hosts'          => '',
+
+			// SEO / canonical。
+			'canonical_enabled'             => 0,
+			'canonical_primary_host'        => '',
+			'canonical_scheme'              => 'https',
 
 			// 转换范围。
 			'target_uploads'                => 1,
@@ -49,8 +52,9 @@ class JRMU_Settings {
 			'target_plugins'                => 0,
 			'extra_hosts'                   => '',
 
-			// 历史文章扫描。
+			// 扫描工具。
 			'scan_limit'                    => 100,
+			'scan_postmeta'                 => 0,
 		);
 	}
 
@@ -71,9 +75,11 @@ class JRMU_Settings {
 			'domain_exclude_admin',
 			'domain_exclude_login',
 			'domain_skip_system_endpoints',
+			'canonical_enabled',
 			'target_uploads',
 			'target_themes',
 			'target_plugins',
+			'scan_postmeta',
 		);
 	}
 
@@ -108,12 +114,10 @@ class JRMU_Settings {
 			$output[ $key ] = ! empty( $input[ $key ] ) ? 1 : 0;
 		}
 
-		// 至少保留 uploads 作为默认转换范围，避免保存后没有任何目标路径。
 		if ( empty( $output['target_uploads'] ) && empty( $output['target_themes'] ) && empty( $output['target_plugins'] ) ) {
 			$output['target_uploads'] = 1;
 		}
 
-		// 未来媒体开关首次开启时记录时间。关闭后清零，重新开启则重新计算“未来”。
 		if ( ! empty( $output['convert_future_media_output'] ) ) {
 			$output['future_media_enabled_at'] = ! empty( $old['convert_future_media_output'] ) && ! empty( $old['future_media_enabled_at'] ) ? absint( $old['future_media_enabled_at'] ) : time();
 		} else {
@@ -126,49 +130,80 @@ class JRMU_Settings {
 		$domain_scheme = isset( $input['domain_scheme'] ) ? sanitize_key( wp_unslash( $input['domain_scheme'] ) ) : $defaults['domain_scheme'];
 		$output['domain_scheme'] = in_array( $domain_scheme, array( 'https', 'http', 'auto' ), true ) ? $domain_scheme : $defaults['domain_scheme'];
 
-		$output['domain_allowed_hosts'] = isset( $input['domain_allowed_hosts'] ) ? self::sanitize_extra_hosts( wp_unslash( $input['domain_allowed_hosts'] ) ) : '';
-		$output['extra_hosts']           = isset( $input['extra_hosts'] ) ? self::sanitize_extra_hosts( wp_unslash( $input['extra_hosts'] ) ) : '';
-		$output['scan_limit']            = isset( $input['scan_limit'] ) ? max( 10, min( 500, absint( $input['scan_limit'] ) ) ) : $defaults['scan_limit'];
+		$domain_rewrite_mode = isset( $input['domain_rewrite_mode'] ) ? sanitize_key( wp_unslash( $input['domain_rewrite_mode'] ) ) : $defaults['domain_rewrite_mode'];
+		$output['domain_rewrite_mode'] = in_array( $domain_rewrite_mode, array( 'current_full', 'root_relative' ), true ) ? $domain_rewrite_mode : $defaults['domain_rewrite_mode'];
+
+		$canonical_scheme = isset( $input['canonical_scheme'] ) ? sanitize_key( wp_unslash( $input['canonical_scheme'] ) ) : $defaults['canonical_scheme'];
+		$output['canonical_scheme'] = in_array( $canonical_scheme, array( 'https', 'http' ), true ) ? $canonical_scheme : $defaults['canonical_scheme'];
+
+		$output['domain_allowed_hosts']   = isset( $input['domain_allowed_hosts'] ) ? self::sanitize_host_lines( wp_unslash( $input['domain_allowed_hosts'] ) ) : '';
+		$output['extra_hosts']            = isset( $input['extra_hosts'] ) ? self::sanitize_host_lines( wp_unslash( $input['extra_hosts'] ) ) : '';
+		$output['canonical_primary_host'] = isset( $input['canonical_primary_host'] ) ? self::sanitize_single_host( wp_unslash( $input['canonical_primary_host'] ) ) : '';
+		$output['scan_limit']             = isset( $input['scan_limit'] ) ? max( 10, min( 1000, absint( $input['scan_limit'] ) ) ) : $defaults['scan_limit'];
 
 		return $output;
 	}
 
 	/**
-	 * 清洗额外域名列表。
+	 * 清洗多行域名。
 	 *
 	 * @param string $raw 原始文本。
 	 * @return string
 	 */
-	public static function sanitize_extra_hosts( $raw ) {
+	public static function sanitize_host_lines( $raw ) {
 		$raw   = (string) $raw;
 		$lines = preg_split( '/\r\n|\r|\n/', $raw );
 		$hosts = array();
 
 		foreach ( $lines as $line ) {
-			$line = trim( $line );
-
-			if ( '' === $line ) {
-				continue;
-			}
-
-			if ( false === strpos( $line, '://' ) ) {
-				$line = 'https://' . $line;
-			}
-
-			$host = wp_parse_url( $line, PHP_URL_HOST );
-
-			if ( ! $host ) {
-				continue;
-			}
-
-			$host = strtolower( sanitize_text_field( $host ) );
-			$host = preg_replace( '/[^a-z0-9\-\.]/i', '', $host );
-
+			$host = self::sanitize_single_host( $line );
 			if ( $host ) {
 				$hosts[] = $host;
 			}
 		}
 
 		return implode( "\n", array_values( array_unique( $hosts ) ) );
+	}
+
+	/**
+	 * 清洗单个域名。
+	 *
+	 * @param string $raw 原始域名或 URL。
+	 * @return string
+	 */
+	public static function sanitize_single_host( $raw ) {
+		$raw = strtolower( trim( (string) $raw ) );
+
+		if ( '' === $raw ) {
+			return '';
+		}
+
+		if ( false === strpos( $raw, '://' ) ) {
+			$raw = 'https://' . $raw;
+		}
+
+		$host = wp_parse_url( $raw, PHP_URL_HOST );
+
+		if ( ! $host ) {
+			return '';
+		}
+
+		$host = strtolower( $host );
+		$host = preg_replace( '/[^a-z0-9\-\.]/i', '', $host );
+
+		return $host ? $host : '';
+	}
+
+	/**
+	 * 获取当前请求 URL。
+	 *
+	 * @return string
+	 */
+	public static function current_admin_url() {
+		$scheme = is_ssl() ? 'https' : 'http';
+		$host   = isset( $_SERVER['HTTP_HOST'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_HOST'] ) ) : '';
+		$uri    = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : '';
+
+		return $host ? $scheme . '://' . $host . $uri : admin_url( 'admin.php?page=jiuliu-relative-media-urls' );
 	}
 }
